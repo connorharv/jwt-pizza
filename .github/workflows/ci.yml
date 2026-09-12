@@ -42,6 +42,13 @@ jobs:
           npx playwright install --with-deps chromium
           npm run test:coverage
 
+      - name: set version
+        id: set_version
+        run: |
+          version=$(date +'%Y%m%d.%H%M%S')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          printf '{"version": "%s" }' "$version" > src/version.json
+
       - name: Update coverage
         run: |
           coverage=$(jq '.total.lines.pct' coverage/coverage-summary.json)
