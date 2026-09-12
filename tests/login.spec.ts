@@ -72,16 +72,12 @@ async function basicInit(page: Page) {
         await route.fulfill({ json: franchiseRes });
     });
 
-    // Order a pizza.
-    await page.route('*/**/api/order', async (route) => {
-        const orderReq = route.request().postDataJSON();
-        const orderRes = {
-            order: { ...orderReq, id: 23 },
-            jwt: 'eyJpYXQ',
-        };
+    // Verify Pizza
+    await page.route('*/**/api/order/verify', async (route) => {
         expect(route.request().method()).toBe('POST');
-        await route.fulfill({ json: orderRes });
-    });
+        const verifyRes = {"message": "valid"};
+        await route.fulfill({ json: verifyRes });
+    })
 
     await page.goto('/');
 }
@@ -94,10 +90,25 @@ test('login', async ({ page }) => {
     await page.getByRole('button', { name: 'Login' }).click();
 
     await expect(page.getByRole('link', { name: 'KC' })).toBeVisible();
+
+    await page.getByRole('link', { name: 'KC', exact: true }).click();
+    await expect(page.getByRole('heading')).toContainText('Your pizza kitchen');
+    await expect(page.getByRole('main')).toContainText('Your pizza kitchenname: Kai Chenemail: d@jwt.comrole:  dinerHow have you lived this long without having a pizza? Buy one now!');
 });
 
 test('purchase with login', async ({ page }) => {
     await basicInit(page);
+
+    // Order a pizza.
+    await page.route('*/**/api/order', async (route) => {
+        const orderReq = route.request().postDataJSON();
+        const orderRes = {
+            order: { ...orderReq, id: 23 },
+            jwt: 'eyJpYXQ',
+        };
+        expect(route.request().method()).toBe('POST');
+        await route.fulfill({ json: orderRes });
+    });
 
     // Go to order page
     await page.getByRole('button', { name: 'Order now' }).click();
@@ -126,4 +137,10 @@ test('purchase with login', async ({ page }) => {
 
     // Check balance
     await expect(page.getByText('0.008')).toBeVisible();
+
+    // Verify
+    await page.getByRole('button', { name: 'Verify' }).click();
+    await expect(page.locator('#hs-jwt-modal')).toContainText('JWT Pizza - valid');
+    await expect(page.locator('.p-4')).toBeVisible();
+    await page.getByRole('button', { name: 'Close' }).click();
 });
