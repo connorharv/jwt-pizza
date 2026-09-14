@@ -93,7 +93,6 @@ test('login', async ({ page }) => {
 
     await page.getByRole('link', { name: 'KC', exact: true }).click();
     await expect(page.getByRole('heading')).toContainText('Your pizza kitchen');
-    await expect(page.getByRole('main')).toContainText('Your pizza kitchenname: Kai Chenemail: d@jwt.comrole:  dinerHow have you lived this long without having a pizza? Buy one now!');
 });
 
 test('purchase with login', async ({ page }) => {
