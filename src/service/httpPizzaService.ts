@@ -10,6 +10,7 @@ import {
   Endpoints,
   OrderResponse,
   JWTPayload,
+  UserList,
 } from "./pizzaService";
 
 // @ts-ignore
@@ -93,6 +94,19 @@ class HttpPizzaService implements PizzaService {
       }
     }
     return Promise.resolve(result);
+  }
+
+  listUsers(
+      page: number = 0,
+      limit: number = 0,
+      nameFilter: string = "*"
+  ): Promise<UserList> {
+    return this.callEndpoint(
+        `/api/user?page=${page}&limit=${limit}&name=${nameFilter}`
+    )
+  }
+  deleteUser(userId: string): Promise<void> {
+    return this.callEndpoint(`/api/user/${userId}`, 'DELETE');
   }
 
   async updateUser(updatedUser: User): Promise<User> {

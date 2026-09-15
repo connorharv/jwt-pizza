@@ -83,6 +83,33 @@ async function adminInit(page: Page) {
        await route.fulfill({ json: deleteRes});
     });
 
+    // Admin List Users
+    await page.route('*/**/api/user?page=0&limit=20&name=*', async (route) => {
+        expect(route.request().method()).toBe('GET');
+        const res = {
+            "users": [
+                {
+                    "id": 1,
+                    "name": "Admin",
+                    "email": "a@jwt.com",
+                    "roles": [
+                        {
+                            "role": "admin"
+                        }
+                    ]
+                },
+                {
+                    "id": 39,
+                    "name": "pizza diner",
+                    "email": "3p1h0wo4c7@test.com",
+                    "roles": []
+                }
+            ],
+            "more": true
+        }
+        await route.fulfill({ json: res});
+    })
+
     await page.goto('/');
 }
 
@@ -133,4 +160,27 @@ test('Admin Delete Franchise', async ({ page }) => {
     await page.getByRole('row', { name: 'pizzaPocket pizza franchisee' }).getByRole('button').click();
     await expect(page.getByRole('main')).toContainText('Are you sure you want to close the pizzaPocket franchise? This will close all associated stores and cannot be restored. All outstanding revenue will not be refunded.CloseCancel');
     await page.getByRole('button', { name: 'Close' }).click();
+});
+
+test('Admin list and delete users', async ({ page }) => {
+    await adminInit(page);
+
+    await page.getByRole('link', { name: 'Login' }).click();
+    await page.getByRole('textbox', { name: 'Email address' }).fill('a@jwt.com');
+    await page.getByRole('textbox', { name: 'Email address' }).press('Tab');
+    await page.getByRole('textbox', { name: 'Password' }).fill('admin');
+    await page.getByRole('textbox', { name: 'Password' }).press('Enter');
+    await page.getByRole('link', { name: 'Admin' }).click();
+
+    await page.getByRole('button', { name: 'List/Delete Users' }).click();
+    await expect(page.locator('#hs-jwt-list-modal')).toContainText('List/Delete Users');
+    await expect(page.locator('#hs-jwt-list-modal')).toContainText('Name');
+    await expect(page.locator('#hs-jwt-list-modal')).toContainText('Email');
+    await expect(page.locator('#hs-jwt-list-modal')).toContainText('Roles');
+    await expect(page.locator('#hs-jwt-list-modal')).toContainText('Delete');
+    page.once('dialog', dialog => {
+        console.log(`Dialog message: ${dialog.message()}`);
+        dialog.dismiss().catch(() => {});
+    });
+    await page.getByRole('button', { name: 'Delete' }).nth(2).click();
 });

@@ -9,9 +9,10 @@ import {
   FranchiseList,
   Role,
   Store,
-  User,
+  User, UserList,
 } from "../service/pizzaService";
-import { TrashIcon } from "../icons";
+import {CloseIcon, TrashIcon} from "../icons";
+import {HSOverlay} from "preline";
 
 interface Props {
   user: User | null;
@@ -26,11 +27,43 @@ export default function AdminDashboard(props: Props) {
   const [franchisePage, setFranchisePage] = React.useState(0);
   const filterFranchiseRef = React.useRef<HTMLInputElement>(null);
 
+  const [userList, setUserList] = React.useState<UserList>({ users: [], more: false });
+  const [userPage, setUserPage] = React.useState(0);
+
   React.useEffect(() => {
     (async () => {
       setFranchiseList(await pizzaService.getFranchises(franchisePage, 3, "*"));
     })();
   }, [props.user, franchisePage]);
+
+  React.useEffect(() => {
+    (async () => {
+      setFranchiseList(await pizzaService.getFranchises(franchisePage, 3, "*"));
+    })();
+  }, [props.user, franchisePage]);
+
+  React.useEffect(() => {
+    (async () => {
+      setUserList(await pizzaService.listUsers(userPage, 20, "*"));
+    })();
+  }, [props.user, userPage]);
+
+  async function confirmDeleteUser(user: User) {
+    if (!window.confirm(`Delete user "${user.name}"? This can't be undone.`)) {
+      return;
+    }
+    await pizzaService.deleteUser(user.id!);
+    setUserList((prev) => ({
+      ...prev,
+      users: prev.users.filter((u) => u.id !== user.id),
+    }));
+  }
+
+  function formatRoles(user: User) {
+    return user.roles
+        ?.map((r) => (r.role === Role.Franchisee ? `Franchisee on ${r.objectId}` : r.role))
+        .join(", ");
+  }
 
   function createFranchise() {
     navigate("/admin-dashboard/create-franchise");
@@ -205,6 +238,53 @@ export default function AdminDashboard(props: Props) {
             title="Add Franchise"
             onPress={createFranchise}
           />
+          <Button
+              className="w-36 text-xs sm:text-sm sm:w-64"
+              title="List/Delete Users"
+              onPress={() => HSOverlay.open(document.getElementById('hs-jwt-list-modal')!)}
+          />
+        </div>
+        <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" id="hs-jwt-list-modal" className="hs-overlay hidden size-full fixed top-10 start-0 z-[80] overflow-x-hidden overflow-y-auto pointer-events-none">
+          <div className="hs-overlay-open:mt-7 hs-overlay-open:opacity-100 hs-overlay-open:duration-500 mt-0 opacity-0 ease-out transition-all sm:max-w-2xl sm:w-full m-3 sm:mx-auto min-h-[calc(100%-3.5rem)]">
+            <div className="w-full flex flex-col bg-white border shadow-sm rounded-xl pointer-events-auto   ">
+              <div className="flex justify-between items-center py-3 px-4 border-b bg-slate-200 rounded-t-xl ">
+                <h3 className="font-bold text-gray-800">List/Delete Users</h3>
+                <button type="button" className="flex justify-center items-center size-7 text-sm font-semibold rounded-full border border-transparent text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:pointer-events-none" data-hs-overlay="#hs-jwt-list-modal">
+                  <CloseIcon className="" />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-scroll max-h-96">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead>
+                  <tr>
+                    <th className="px-3 py-2 text-start text-xs font-semibold text-gray-500 uppercase">Name</th>
+                    <th className="px-3 py-2 text-start text-xs font-semibold text-gray-500 uppercase">Email</th>
+                    <th className="px-3 py-2 text-start text-xs font-semibold text-gray-500 uppercase">Roles</th>
+                    <th className="px-3 py-2 text-start text-xs font-semibold text-gray-500 uppercase"></th>
+                  </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                  {userList.users.map((u) => (
+                      <tr key={u.id}>
+                        <td className="px-3 py-2 text-sm text-gray-800">{u.name}</td>
+                        <td className="px-3 py-2 text-sm text-gray-800">{u.email}</td>
+                        <td className="px-3 py-2 text-sm text-gray-800">{formatRoles(u)}</td>
+                        <td className="px-3 py-2 text-end">
+                          <button
+                              type="button"
+                              className="py-1.5 px-3 inline-flex items-center gap-x-2 text-sm font-medium rounded-lg border border-transparent bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:pointer-events-none"
+                              onClick={() => confirmDeleteUser(u)}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                  ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
       </View>
     );
