@@ -166,7 +166,7 @@ test('Admin list and delete users', async ({ page }) => {
 
     await targetRow.getByRole('button', { name: 'Delete' }).click();
 
-    await expect(rows).toHaveCount(rowCountBefore - 1);
+    await expect(rows).toHaveCount(rowCountBefore-1);
 
     await expect(modal.locator('tbody')).not.toContainText(targetEmail!);
 });
