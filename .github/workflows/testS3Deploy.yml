@@ -22,7 +22,7 @@ jobs:
         with:
           audience: sts.amazonaws.com
           aws-region: us-east-1
-          role-to-assume: arn:aws:iam::682033493602:role/github-ci
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT }}:role/${{ secrets.CI_IAM_ROLE }}
 
       - name: Push to AWS S3
         run: |
