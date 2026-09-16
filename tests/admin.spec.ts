@@ -1,6 +1,6 @@
 import { test, expect } from 'playwright-test-coverage';
 import {Page} from "@playwright/test";
-import {Role, User} from "../src/service/pizzaService";
+import {Role, User, UserList} from "../src/service/pizzaService";
 
 async function adminInit(page: Page) {
     let loggedInUser: User | undefined;
@@ -86,6 +86,28 @@ async function adminInit(page: Page) {
     await page.goto('/');
 }
 
+async function mockUserListRequest(page: Page) {
+    await page.route('**/api/user*', async (route) => {
+        expect(route.request().method()).toBe('GET');
+        const usersRes: UserList = {
+            users: [
+                { id: '1', name: 'Alice Admin', email: 'alice@jwt.com', roles: [{ role: Role.Admin }] },
+                { id: '2', name: 'Bob Diner', email: 'bob@jwt.com', roles: [{ role: Role.Diner }] },
+                { id: '3', name: 'Carol Franchisee', email: 'carol@jwt.com', roles: [{ role: Role.Franchisee, objectId: '1' }] },
+            ],
+            more: false,
+        };
+        await route.fulfill({ json: usersRes });
+    });
+}
+
+async function mockDeleteUserRequest(page: Page) {
+    await page.route('*/**/api/user/2', async (route) => {
+        expect(route.request().method()).toBe('DELETE');
+        await route.fulfill({ json: { message: 'user deleted' } });
+    });
+}
+
 test('Admin login', async ({ page }) => {
     await adminInit(page);
 
@@ -136,7 +158,9 @@ test('Admin Delete Franchise', async ({ page }) => {
 });
 
 test('Admin list and delete users', async ({ page }) => {
-    await page.goto('/');
+    await adminInit(page);
+    await mockUserListRequest(page);
+    await mockDeleteUserRequest(page);
 
     await page.getByRole('link', { name: 'Login' }).click();
     await page.getByRole('textbox', { name: 'Email address' }).fill('a@jwt.com');

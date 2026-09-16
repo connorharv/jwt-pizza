@@ -1,7 +1,60 @@
 import { test, expect } from 'playwright-test-coverage';
+import {Page} from "@playwright/test";
+import {Role, User} from "../src/service/pizzaService";
+
+async function mockRegisterRequest(page: Page, expectedName: string, expectedEmail: string, expectedPassword: string) {
+    await page.route('*/**/api/auth', async (route) => {
+        if (route.request().method() !== 'POST') return route.fallback();
+
+        const body = route.request().postDataJSON();
+        expect(body.name).toBe(expectedName);
+        expect(body.email).toBe(expectedEmail);
+        expect(body.password).toBe(expectedPassword);
+
+        const user: User = {
+            id: '1',
+            name: expectedName,
+            email: expectedEmail,
+            roles: [{ role: Role.Diner }],
+        };
+        await route.fulfill({ json: { user, token: 'fake-register-token' } });
+    });
+}
+
+async function mockAdminLoginRequest(page: Page) {
+    await page.route('*/**/api/auth', async (route) => {
+        if (route.request().method() !== 'PUT') return route.fallback();
+
+        const body = route.request().postDataJSON();
+        expect(body.email).toBe('a@jwt.com');
+        expect(body.password).toBe('admin');
+
+        const user: User = {
+            id: '3',
+            name: 'Kai Chen',
+            email: 'a@jwt.com',
+            roles: [{ role: Role.Admin }],
+        };
+        await route.fulfill({ json: { user, token: 'fake-admin-token' } });
+    });
+}
+
+async function mockUpdateUserRequest(page: Page, assertBody: (body: any) => void) {
+    await page.route('*/**/api/user/*', async (route) => {
+        expect(route.request().method()).toBe('PUT');
+
+        const body = route.request().postDataJSON();
+        assertBody(body);
+
+        await route.fulfill({ json: { user: body, token: 'fake-update-token' } });
+    });
+}
 
 test('updateUser', async ({ page }) => {
     const email = `user${Math.floor(Math.random() * 10000)}@jwt.com`;
+
+    await mockRegisterRequest(page, 'pizza diner', email, 'diner');
+
     await page.goto('/');
     await page.getByRole('link', { name: 'Register' }).click();
     await page.getByRole('textbox', { name: 'Full name' }).fill('pizza diner');
@@ -13,7 +66,12 @@ test('updateUser', async ({ page }) => {
 
     await expect(page.getByRole('main')).toContainText('pizza diner');
 
-    // Test dialog displays
+    // Assert the update request sends the correct data
+    await mockUpdateUserRequest(page, (body) => {
+        expect(body.name).toBe('pizza dinerx');
+        expect(body.email).toBe(email);
+    });
+
     await page.getByRole('button', { name: 'Edit' }).click();
     await expect(page.locator('h3')).toContainText('Edit user');
     await page.getByRole('textbox').first().fill('pizza dinerx');
@@ -23,21 +81,21 @@ test('updateUser', async ({ page }) => {
 
     await expect(page.getByRole('main')).toContainText('pizza dinerx');
 
-    // Test persistence
-    await page.getByRole('link', { name: 'Logout' }).click();
-    await page.getByRole('link', { name: 'Login' }).click();
-
-    await page.getByRole('textbox', { name: 'Email address' }).fill(email);
-    await page.getByRole('textbox', { name: 'Password' }).fill('diner');
-    await page.getByRole('button', { name: 'Login' }).click();
-
-    await page.getByRole('link', { name: 'pd' }).click();
-
-    await expect(page.getByRole('main')).toContainText('pizza dinerx');
+    // Persistence isn't being verified anymore — no real backend to persist to.
+    // await page.getByRole('link', { name: 'Logout' }).click();
+    // await page.getByRole('link', { name: 'Login' }).click();
+    // await page.getByRole('textbox', { name: 'Email address' }).fill(email);
+    // await page.getByRole('textbox', { name: 'Password' }).fill('diner');
+    // await page.getByRole('button', { name: 'Login' }).click();
+    // await page.getByRole('link', { name: 'pd' }).click();
+    // await expect(page.getByRole('main')).toContainText('pizza dinerx');
 });
 
-test('updateUser with password and email', async ({ page}) => {
+test('updateUser with password and email', async ({ page }) => {
     const email = `user${Math.floor(Math.random() * 10000)}@jwt.com`;
+
+    await mockRegisterRequest(page, 'pizza diner', email, 'diner');
+
     await page.goto('/');
     await page.getByRole('link', { name: 'Register' }).click();
     await page.getByRole('textbox', { name: 'Full name' }).fill('pizza diner');
@@ -54,13 +112,19 @@ test('updateUser with password and email', async ({ page}) => {
 
     const newEmail = `user${Math.floor(Math.random() * 10000)}@jwt.com`;
 
+    await mockUpdateUserRequest(page, (body) => {
+        expect(body.email).toBe(newEmail);
+        expect(body.password).toBe('new password');
+    });
+
     await page.locator('input[type="email"]').click();
     await page.locator('input[type="email"]').fill(newEmail);
     await page.locator('#password').click();
     await page.locator('#password').fill('new password');
     await page.getByRole('button', { name: 'Update' }).click();
 
-    // Test persistence
+    // Uncomment when backend is connected
+    /*
     await page.getByRole('link', { name: 'Logout' }).click();
     await page.getByRole('link', { name: 'Login' }).click();
 
@@ -71,9 +135,12 @@ test('updateUser with password and email', async ({ page}) => {
     await page.getByRole('link', { name: 'pd' }).click();
 
     await expect(page.getByRole('main')).toContainText(newEmail);
-})
+     */
+});
 
 test('updateUser with admin', async ({ page }) => {
+    await mockAdminLoginRequest(page);
+
     await page.goto('/');
     const newPassword = `user${Math.floor(Math.random() * 10000)}`;
 
@@ -82,13 +149,19 @@ test('updateUser with admin', async ({ page }) => {
     await page.getByRole('textbox', { name: 'Password' }).fill('admin');
     await page.getByRole('button', { name: 'Login' }).click();
 
-    await page.getByRole('link', { name: 'A', exact: true }).click();
+    await page.getByRole('link', { name: 'KC', exact: true }).click();
+
+    await mockUpdateUserRequest(page, (body) => {
+        expect(body.password).toBe(newPassword);
+    });
 
     await page.getByRole('button', { name: 'Edit' }).click();
     await page.locator('#password').fill(newPassword);
     await page.getByRole('button', { name: 'Update' }).click();
 
-    // Test persistence
+    // Uncomment when backend is connected
+    /*
+    and no revert needed since nothing was actually changed server-side.
     await page.getByRole('link', { name: 'Logout' }).click();
     await page.getByRole('link', { name: 'Login' }).click();
 
@@ -103,4 +176,5 @@ test('updateUser with admin', async ({ page }) => {
     await page.locator('#password').fill('admin');
     await page.getByRole('button', { name: 'Update' }).click();
 
-})
+     */
+});
