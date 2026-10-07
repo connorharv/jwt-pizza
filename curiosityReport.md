@@ -222,39 +222,54 @@ prints all debug and process statements. Here is what is printed for the test.
 
 Let's dissect this one bit at a time!
 
+But first! 
+Below is a useful map of where each piece runs. Every call in the test goes down through these layers, and
+the result comes back up the same way:
+
+```text
+ Test file (Node)            curiosity.spec.ts: page.goto(), getByRole(), expect()
+        │
+ Client (Node)               playwright-core/src/client/   page.ts, frame.ts, locator.ts
+        │  JSON message: { guid, method, params }
+ Dispatcher (Node)           playwright-core/src/server/dispatchers/   frameDispatcher.ts
+        │
+ Server (Node)               playwright-core/src/server/   frames.ts, dom.ts, chromium/crPage.ts
+        │  Chrome DevTools Protocol (CDP)
+ Browser (Chromium)          packages/injected/src/   injectedScript.ts, roleUtils.ts, ariaSnapshot.ts
+```
+
 #### goto
 
 `page.ts` is `playwright-core/src/client/page.ts`. Makes sense.
-It calls Frame.goto method, where `Frame` is a child of ChannelOwner and implements the Frame interface.
+It calls the `Frame.goto` method, where `Frame` is a child of `ChannelOwner` and implements the `Frame` interface.
 The documentation states that "At every point of time, page exposes its current frame tree via the 
 page.mainFrame() and frame.childFrames() methods".
 
-From there, the `Frame.goto()` method uses a `verifyLoadState` method, but that only checks that the
-`waitUntil` option is one of (load|domcontentloaded|networkidle|commit) and defaults it to `load`. It does
-not look at the page at all. The client then sends a `goto` call through its channel (the ChannelOwner's
+From there, the `Frame.goto()` method uses a `verifyLoadState` method which checks that the
+`waitUntil` option is set to `load` (load|domcontentloaded|networkidle|commit). 
+The client then sends a `goto` call through its channel (the ChannelOwner's
 connection to the server).
 
 Since Playwright works in multiple languages, the client side is actually fairly simple to avoid 
 code duplication. Most of the actual logic is done on the server side, shown below. This is true for
 all functions of Playwright.
 
-The real work happens on the server side. `frameDispatcher.ts` receives the `goto` call and passes it to
+`frameDispatcher.ts` receives the `goto` call and passes it to
 `server/frames.ts`, where `gotoImpl` calls `this._page.delegate.navigateFrame(...)`. For Chromium, the
 delegate is `crPage.ts`, which sends `Page.navigate` to the browser over the Chrome DevTools Protocol (CDP),
 the same command DevTools itself uses. The server then waits until the browser fires the `load` event.
-`load` is a browser event, not a server response: it means the document and its resources (images,
-scripts, CSS) have finished loading. Only then does the response go back to the client and `page.goto()`
-resolves.
+This event means that all resources (images, scripts, CSS, etc.) have been loaded in.
+Only then does the response go back to the client and `page.goto()` resolves.
 
 #### getByRole
 
 Same thing: page.ts → mainFrame().getByRole().
-This time, the frame returns a Locator built from a single selector string. For `page.getByRole('heading')`
+This time, the frame returns a `Locator` built from a single selector string. For `page.getByRole('heading')`
 there is only a role, no options.
 
 `getByRoleSelector` in `locatorUtils.ts` builds that string. With no options it is just
 `internal:role=heading`. Options become attribute filters, so `getByRole('link', { name: 'Login' })`
-becomes `internal:role=link[name="Login"i]`.
+becomes `internal:role=link[name="Login"i]`. Pretty nifty.
 
 The important part: `getByRole` sends nothing to the browser. It only builds a string. The element is
 looked up later, every time an action or assertion uses the locator. This means if the node changes between
@@ -286,7 +301,7 @@ script!
 Playwright uses the `InjectedScript` class (`packages/injected/src/injectedScript.ts`) 
 into the page once per frame. Then, for each check, `callOnSelectorInternal` runs a small function 
 in the page that:
-1. calls `injected.querySelectorAll` with the role engine to find the `<h2>`,
+1. calls `injected.querySelectorAll` with the role engine to find the HTML class (in this case, it is an `<h2>`),
 2. throws a strict-mode error if more than one element matches,
 3. runs the callback below, which `frameSelectors.ts` turned into text with `String(pageFunction)` so it could be sent to the browser.
 
@@ -316,3 +331,61 @@ The `matches` boolean is then sent back up the chain (server, dispatcher, client
 setting the expect to true and passing the assertion! If `matches` had been `false`, the server would
 wait a little and run the check in the browser again, until it passed or the timeout ran out.
 
+#### Where the text is actually compared
+
+So where do `received` and `matches` in that JSON come from? 
+
+Inside the browser, `injected.expect`
+calls `expectSingleElement` in `injectedScript.ts`. For the `'to.have.text'` expression, it reads the
+element's text straight from the live DOM:
+
+```ts
+} else if (expression === 'to.have.text') {
+  received = options.useInnerText ? (element as HTMLElement).innerText : elementText(new Map(), element).full;
+}
+...
+const matcher = new ExpectedTextMatcher(options.expectedText[0]);
+return { received, matches: matcher.matches(received) };
+```
+
+`ExpectedTextMatcher.matches` then normalizes the whitespace in both strings, and since `toContainText`
+set `matchSubstring: true`, it does:
+
+```ts
+if (this._substring !== undefined)
+  return text.includes(this._substring);
+```
+
+That is the whole comparison!
+
+#### click
+
+`.click()` follows the same path down to the server, but ends in `server/dom.ts` instead of an
+`expect`. The `pw:api` log lines for a click come straight from `_performPointerAction` in `dom.ts`:
+
+1. **"waiting for element to be visible, enabled and stable"**: the injected script checks the element.
+2. **"scrolling into view if needed"**: the server scrolls the element on screen.
+3. The server works out a point inside the element to click and then checks that the element is the
+   thing actually at that point.
+4. **"performing click action"**: `page.mouse.click(x, y)` sends real mouse events to Chromium.
+
+#### toMatchAriaSnapshot
+
+`toMatchAriaSnapshot` follows the same `expect` path using the expression `'to.match.aria'`. The difference
+is in the two ends:
+
+- On the server, `Frame.expect` first parses the YAML template from the test into a tree.
+- In the browser, `matchesExpectAriaTemplate` (`packages/injected/src/ariaSnapshot.ts`) builds the
+  accessibility tree using the same role and accessible-name logic as `getByRole`
+  (`roleUtils.ts`), and compares it to the template.
+
+So `getByRole`, `toMatchAriaSnapshot`, and the snapshot that codegen generated all rely on the same
+accessibility code in `roleUtils.ts`.
+
+## Modern day Magic
+
+Looking behind the scenes, it is far from simple. However, that is the beauty of it, because of the 
+sheer amount of checks that happen on both the server and browser, it is extremely strong and there's no
+wonder why it's the flagship resource for browser testing. It combines both ease of access for anyone to write
+high-quality tests and an incredibly structured backend that is practically certain to be deterministic, despite
+the uncertainty of the internet with sending/receiving packets and DOM rerendering.
