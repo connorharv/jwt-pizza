@@ -84,6 +84,7 @@ That's all fine and dandy that I can create tests extremely fast that assert use
 It can run hundreds of tests much faster than I ever could individually, and it is deterministic. 
 
 But really under the hood, what is it really doing? What makes it so simple?
+What is Playwright really doing with all of those `page` functions?
 
 Playwright is open-source, and the beauty of that means you can read all of it! With 18,054 commits, 184
 branches, 166 releases, 805 contributors, 6500 forks, and almost 100,000 stars, it is a massive project
@@ -92,7 +93,7 @@ with no shortage of support.
 By cloning the repository and adding it as a package to my IntelliJ configuration, I can route all playwright tests
 to go through the repo, allowing me super easy access to debug it and step through each file.
 
-### Tracing an example test
+### Tracing an example assertion
 I placed the test listed above in `tests/curiosity.spec.ts`, and using the `DEBUG=pw:api` env variable, it
 prints all debug and process statements. Here is what is printed for the test.
 ```html
@@ -219,6 +220,8 @@ prints all debug and process statements. Here is what is printed for the test.
   1 passed (8.4s)
 ```
 
+Let's dissect this one bit at a time!
+
 #### goto
 
 `page.ts` is `playwright-core/src/client/page.ts`. Makes sense.
@@ -230,6 +233,10 @@ From there, the `Frame.goto()` method uses a `verifyLoadState` method, but that 
 `waitUntil` option is one of (load|domcontentloaded|networkidle|commit) and defaults it to `load`. It does
 not look at the page at all. The client then sends a `goto` call through its channel (the ChannelOwner's
 connection to the server).
+
+Since Playwright works in multiple languages, the client side is actually fairly simple to avoid 
+code duplication. Most of the actual logic is done on the server side, shown below. This is true for
+all functions of Playwright.
 
 The real work happens on the server side. `frameDispatcher.ts` receives the `goto` call and passes it to
 `server/frames.ts`, where `gotoImpl` calls `this._page.delegate.navigateFrame(...)`. For Chromium, the
@@ -250,8 +257,8 @@ there is only a role, no options.
 becomes `internal:role=link[name="Login"i]`.
 
 The important part: `getByRole` sends nothing to the browser. It only builds a string. The element is
-looked up later, every time an action or assertion uses the locator. That is why a locator still works
-after React re-renders the element, unlike an element handle, which points at one specific DOM node.
+looked up later, every time an action or assertion uses the locator. This means if the node changes between
+renders (for whatever reason), the locator still works.
 
 The `toContainText` method from `matchers.ts` serializes the expected text values and passes that
 to the `Locator._expect` function with the expression 'to.have.text' and passing in options as a 
@@ -259,30 +266,32 @@ to the `Locator._expect` function with the expression 'to.have.text' and passing
 expect they aren't important.
 
 `Locator._expect` adds its selector string and calls the client `Frame._expect`, which calls
-`this._channel.expect(...)` inside `_wrapApiCall`. The `_channel` is a JavaScript `Proxy`
-(`channelOwner.ts`): any protocol method name turns into a function that validates the params and calls
-`connection.sendMessageToServer`, which builds a JSON message like `{ guid, method: 'expect', params }`.
-In JavaScript the client and server live in the same process, so `inprocess.ts` hands that message
-straight to the server's `DispatcherConnection.dispatch`, which finds the `FrameDispatcher` by `guid` and
-calls its `expect` method by name. (In Python, Java, and .NET, this same message goes over a pipe to a
-Node.js driver process instead. That is why the client/server split exists.)
+`this._channel.expect` inside `_wrapApiCall`. The `_channel` is a JavaScript `Proxy`
+(from `channelOwner.ts`) where any protocol method name turns into a function that validates the 
+params and calls `connection.sendMessageToServer`, which builds a JSON message like 
+`{ guid, method: 'expect', params }`. From here `inprocess.ts` hands that message to the
+server's `DispatcherConnection.dispatch`, which finds 
+the `FrameDispatcher` by `guid` and calls its `expect` method by name.
 
-`frameDispatcher:expect` passes the call to the server's `Frame.expect` in `server/frames.ts`. This is
-where auto-waiting lives: it does one check right away, and if that fails it retries in a loop
+`frameDispatcher:expect` passes the call to the server's `Frame.expect` in `server/frames.ts`. From
+here, it does one check right away, and if that fails it retries in a loop
 (`retryWithProgressAndBackoff`) until the check passes or the timeout runs out. Each check goes through
 `FrameSelectors:callOnSelectorInternal`.
 
 This is where it gets really cool!
 
-Nothing is actually checked by Node itself. Instead, the check runs inside Chromium. Playwright
-installs its `InjectedScript` class (`packages/injected/src/injectedScript.ts`) into the page once per
-frame. Then, for each check, `callOnSelectorInternal` runs a small function in the page that:
+Nothing is actually checked by Node itself. Instead, the check runs inside Chromium via an injected
+script!
+
+Playwright uses the `InjectedScript` class (`packages/injected/src/injectedScript.ts`) 
+into the page once per frame. Then, for each check, `callOnSelectorInternal` runs a small function 
+in the page that:
 1. calls `injected.querySelectorAll` with the role engine to find the `<h2>`,
 2. throws a strict-mode error if more than one element matches,
 3. runs the callback below, which `frameSelectors.ts` turned into text with `String(pageFunction)` so it could be sent to the browser.
 
-This is the callback as it appears in the compiled bundle. Names like `options2` and `isArray2` come from
-esbuild. The TypeScript source is in `frames.ts:_expectInternal`.
+Below is the actual callback or injected script that is run on Chromium. 
+This is from `frames.ts:_expectInternal`.
 ```js
 async ({ injected, elements, frameVisible }, options2) => {
   const isArray2 = options2.expression === "to.have.count" || options2.expression.endsWith(".array");
@@ -290,7 +299,7 @@ async ({ injected, elements, frameVisible }, options2) => {
   return { log: log2, ...await injected.expect(elements[0], options2, elements, frameVisible) };
 }
 ```
-The function runs in Chromium through the CDP command `Runtime.callFunctionOn` (`crExecutionContext.ts`).
+The function runs in Chromium and is eventually sent back as a resolved Promise.
 Its return value is serialized and sent back to Node. This value goes back to `frames.ts:_expectInternal`,
 and it holds a lot of useful information. For this expect, it is `resolved.result`:
 ```JSON
